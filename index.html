@@ -414,6 +414,10 @@ function iniciar(){
   document.getElementById('hdrNombre').innerHTML = `${esc(sesion.nombre)}<small>${esc(sesion.cargo||'')}</small>`;
   document.getElementById('avatar').textContent = iniciales(sesion.nombre);
   document.getElementById('navAdmin').classList.toggle('hidden', !sesion.es_admin);
+  // reiniciar estado por si otra persona usó esta misma pestaña antes
+  datosAdmin = []; empleadosAdmin = []; document.getElementById('aDesde').value = '';
+  document.getElementById('aKpis').innerHTML = ''; document.getElementById('aBody').innerHTML = '';
+  cambiarModulo('registro');
   if(sesion.debe_cambiar_clave){ mostrarCambioClave(true); return; }
   mostrarApp();
 }
@@ -453,6 +457,12 @@ async function cargarSemana(){
     original = {}; (d.horas||[]).forEach(h=> original[h.actividad_id+'|'+h.fecha] = Number(h.horas));
     notasOrig = {}; (d.notas||[]).forEach(n=> notasOrig[n.actividad_id] = n.nota);
     pintarGrilla(); nota('gMsg','');
+    // Admin sin actividades propias (ej. directores): solo ve el Consolidado
+    const navReg = document.querySelector('.nav-btn[data-module="registro"]');
+    if(sesion.es_admin && !actividades.length){
+      navReg.classList.add('hidden');
+      if(!document.getElementById('mod-admin').classList.contains('active')) cambiarModulo('admin');
+    } else { navReg.classList.remove('hidden'); }
   }catch(e){ nota('gMsg', e.message, 'err'); }
 }
 
