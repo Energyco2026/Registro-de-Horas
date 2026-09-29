@@ -119,6 +119,18 @@
   .status-note.info{background:#eef4fb;color:var(--navy)}
   .pct{display:inline-block;min-width:52px;padding:4px 8px;border-radius:999px;background:#eef4e1;color:#527d00;font-size:11px;font-weight:800}
   .emp-cell{font-weight:800;color:var(--navy)}
+  .toolbar select{border:1px solid #dbe3ee;border-radius:10px;padding:9px 11px;outline:none;color:var(--text);background:#fff;min-width:190px}
+  .toolbar select:focus{border-color:var(--green)}
+  .seg{display:inline-flex;background:#f1f5f9;border-radius:12px;padding:4px;gap:4px}
+  .seg-btn{border:0;background:transparent;border-radius:9px;padding:8px 14px;font-weight:800;color:#526277;cursor:pointer;font-size:13px}
+  .seg-btn.active{background:#fff;color:var(--navy);box-shadow:0 2px 8px rgba(31,56,100,.1)}
+  tr.day-row td{background:var(--navy);color:#fff;font-weight:800;text-align:left;padding:11px 14px;font-size:13px}
+  tr.day-row td .day-tot{float:right;background:rgba(255,255,255,.15);padding:3px 10px;border-radius:999px}
+  tr.emp-row td{background:#edf6d8;color:#3f6200;font-weight:800;text-align:left;padding:9px 14px}
+  tr.emp-row td .day-tot{float:right}
+  tr.missing-row td{background:#fff8e6;color:#8a5a00;text-align:left;font-size:12px;padding:9px 14px}
+  td.nota-cell{text-align:left;color:var(--muted);font-size:12px;max-width:340px}
+  td.indent{padding-left:34px!important}
 
   @media(max-width:900px){
     .layout{grid-template-columns:1fr}
@@ -259,13 +271,26 @@
               <div class="week-nav">
                 <div><label>Desde</label><input type="date" id="aDesde"></div>
                 <div><label>Hasta</label><input type="date" id="aHasta"></div>
+                <div><label>Empleado</label><select id="aEmp" onchange="pintarAdmin()"><option value="">Todos</option></select></div>
                 <div style="align-self:flex-end"><button class="btn-navy" onclick="cargarAdmin()">Consultar</button></div>
               </div>
               <button class="export-btn" onclick="descargarCSV()">⇩ Descargar CSV</button>
             </div>
+            <div class="toolbar" style="padding-top:12px;padding-bottom:12px">
+              <div class="week-nav">
+                <button class="small-btn" onclick="rangoRapido('hoy')">Hoy</button>
+                <button class="small-btn" onclick="rangoRapido('ayer')">Ayer</button>
+                <button class="small-btn" onclick="rangoRapido('semana')">Esta semana</button>
+                <button class="small-btn" onclick="rangoRapido('mes')">Este mes</button>
+              </div>
+              <div class="seg">
+                <button class="seg-btn active" data-v="dia" onclick="cambiarVistaAdmin('dia')">Por día</button>
+                <button class="seg-btn" data-v="resumen" onclick="cambiarVistaAdmin('resumen')">Resumen del rango</button>
+              </div>
+            </div>
             <div class="table-wrap">
               <table>
-                <thead><tr><th class="left">Empleado</th><th class="left">Actividad</th><th>Horas</th><th>% del empleado</th></tr></thead>
+                <thead id="aHead"></thead>
                 <tbody id="aBody"><tr><td colspan="4" style="color:var(--muted)">Selecciona un rango y presiona Consultar.</td></tr></tbody>
               </table>
             </div>
@@ -403,8 +428,7 @@ function cambiarModulo(m){
   document.querySelectorAll('.nav-btn').forEach(b=>b.classList.toggle('active', b.dataset.module===m));
   document.querySelectorAll('.module').forEach(x=>x.classList.toggle('active', x.id==='mod-'+m));
   if(m==='admin' && !document.getElementById('aDesde').value){
-    const h=hoyISO(); document.getElementById('aDesde').value = h.slice(0,8)+'01'; document.getElementById('aHasta').value = h;
-    cargarAdmin();
+    rangoRapido('hoy');
   }
 }
 
@@ -511,37 +535,113 @@ async function guardar(){
 window.addEventListener('beforeunload', e=>{ if(sesion && hayCambios()){ e.preventDefault(); e.returnValue=''; } });
 
 // ================== CONSOLIDADO (ADMIN) ==================
+let vistaAdmin = 'dia';
+let empleadosAdmin = [];   // [{nombre, cargo}]
+
+function fmtLarga(s){
+  const t = parseISO(s).toLocaleDateString('es-EC',{weekday:'long', day:'2-digit', month:'long', year:'numeric'});
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
+function rangoRapido(tipo){
+  const h = hoyISO(); let d = h, a = h;
+  if(tipo==='ayer'){ d = a = sumarDias(h,-1); }
+  if(tipo==='semana'){ d = lunesDe(h); }
+  if(tipo==='mes'){ d = h.slice(0,8)+'01'; }
+  document.getElementById('aDesde').value = d; document.getElementById('aHasta').value = a;
+  cargarAdmin();
+}
+
+function cambiarVistaAdmin(v){
+  vistaAdmin = v;
+  document.querySelectorAll('.seg-btn').forEach(b=>b.classList.toggle('active', b.dataset.v===v));
+  pintarAdmin();
+}
+
 async function cargarAdmin(){
   const d=document.getElementById('aDesde').value, h=document.getElementById('aHasta').value;
   if(!d||!h){ nota('aMsg','Selecciona el rango de fechas.','err'); return; }
+  if(d>h){ nota('aMsg','La fecha "Desde" no puede ser mayor que "Hasta".','err'); return; }
   nota('aMsg','Consultando…','info');
   try{
+    if(!empleadosAdmin.length){
+      empleadosAdmin = await rpc('act_admin_empleados',{p_token:sesion.token}) || [];
+      const sel = document.getElementById('aEmp');
+      sel.innerHTML = '<option value="">Todos</option>' + empleadosAdmin.map(e=>`<option value="${esc(e.nombre)}">${esc(e.nombre)}</option>`).join('');
+    }
     datosAdmin = await rpc('act_admin_detalle',{p_token:sesion.token, p_desde:d, p_hasta:h}) || [];
-    const porEmp={}, porEA={};
-    datosAdmin.forEach(r=>{
-      porEmp[r.empleado]=(porEmp[r.empleado]||0)+Number(r.horas);
-      const k=r.empleado+'||'+r.actividad; porEA[k]=(porEA[k]||0)+Number(r.horas);
-    });
-    const total = Object.values(porEmp).reduce((a,b)=>a+b,0);
-    const colores=['green','blue','yellow',''];
-    document.getElementById('aKpis').innerHTML =
-      `<div class="kpi"><div class="label">Horas totales</div><div class="value">${fmt(total)}</div><div class="sub">${Object.keys(porEmp).length} personas con registro</div></div>` +
-      Object.entries(porEmp).sort((a,b)=>b[1]-a[1]).map(([e,t],i)=>
-        `<div class="kpi ${colores[i%4]}"><div class="label">${esc(e)}</div><div class="value">${fmt(t)}</div><div class="sub">${total?fmt(t/total*100):0}% del total</div></div>`).join('');
-    const filas = Object.entries(porEA).map(([k,t])=>{ const [e,a]=k.split('||'); return {e,a,t}; })
-      .sort((x,y)=> x.e.localeCompare(y.e) || y.t-x.t);
-    document.getElementById('aBody').innerHTML = filas.length ? filas.map(f=>
-      `<tr><td class="left emp-cell">${esc(f.e)}</td><td class="left">${esc(f.a)}</td><td class="tot">${fmt(f.t)}</td><td><span class="pct">${fmt(f.t/porEmp[f.e]*100)}%</span></td></tr>`).join('')
-      : `<tr><td colspan="4" style="color:var(--muted)">Sin registros en el rango.</td></tr>`;
+    pintarAdmin();
     nota('aMsg','');
   }catch(e){ nota('aMsg', e.message, 'err'); }
+}
+
+function pintarAdmin(){
+  const filtro = document.getElementById('aEmp').value;
+  const datos = datosAdmin.filter(r=> !filtro || r.empleado===filtro);
+
+  // ---- KPIs ----
+  const porEmp={};
+  datos.forEach(r=> porEmp[r.empleado]=(porEmp[r.empleado]||0)+Number(r.horas));
+  const total = Object.values(porEmp).reduce((a,b)=>a+b,0);
+  const colores=['green','blue','yellow',''];
+  document.getElementById('aKpis').innerHTML =
+    `<div class="kpi"><div class="label">Horas totales</div><div class="value">${fmt(total)}</div><div class="sub">${Object.keys(porEmp).length} persona(s) con registro</div></div>` +
+    Object.entries(porEmp).sort((a,b)=>b[1]-a[1]).map(([e,t],i)=>
+      `<div class="kpi ${colores[i%4]}"><div class="label">${esc(e)}</div><div class="value">${fmt(t)}</div><div class="sub">${total?fmt(t/total*100):0}% del total</div></div>`).join('');
+
+  if(vistaAdmin==='resumen') pintarResumen(datos, porEmp); else pintarPorDia(datos);
+}
+
+function pintarResumen(datos, porEmp){
+  document.getElementById('aHead').innerHTML = `<tr><th class="left">Empleado</th><th class="left">Actividad</th><th>Horas</th><th>% del empleado</th></tr>`;
+  const porEA={};
+  datos.forEach(r=>{ const k=r.empleado+'||'+r.actividad; porEA[k]=(porEA[k]||0)+Number(r.horas); });
+  const filas = Object.entries(porEA).map(([k,t])=>{ const [e,a]=k.split('||'); return {e,a,t}; })
+    .sort((x,y)=> x.e.localeCompare(y.e) || y.t-x.t);
+  document.getElementById('aBody').innerHTML = filas.length ? filas.map(f=>
+    `<tr><td class="left emp-cell">${esc(f.e)}</td><td class="left">${esc(f.a)}</td><td class="tot">${fmt(f.t)}</td><td><span class="pct">${fmt(f.t/porEmp[f.e]*100)}%</span></td></tr>`).join('')
+    : `<tr><td colspan="4" style="color:var(--muted)">Sin registros en el rango.</td></tr>`;
+}
+
+function pintarPorDia(datos){
+  document.getElementById('aHead').innerHTML = `<tr><th class="left">Empleado / Actividad</th><th>Horas</th><th class="left">Nota / detalle</th></tr>`;
+  const filtro = document.getElementById('aEmp').value;
+  const d=document.getElementById('aDesde').value;
+  const hoy=hoyISO(), hSel=document.getElementById('aHasta').value;
+  const h = hSel > hoy ? hoy : hSel;   // no mostrar días futuros
+
+  // días hábiles del rango (lunes a viernes), del más reciente al más antiguo
+  const dias=[]; for(let f=h; f>=d; f=sumarDias(f,-1)){ const w=parseISO(f).getDay(); if(w>=1 && w<=5) dias.push(f); if(dias.length>62) break; }
+  // incluir también sábados/domingos si alguien registró
+  datos.forEach(r=>{ if(!dias.includes(r.fecha)) dias.push(r.fecha); });
+  dias.sort((a,b)=> b.localeCompare(a));
+
+  const esperados = empleadosAdmin.map(e=>e.nombre).filter(n=> !filtro || n===filtro);
+  let html='';
+  dias.forEach(f=>{
+    const delDia = datos.filter(r=>r.fecha===f);
+    const totDia = delDia.reduce((a,r)=>a+Number(r.horas),0);
+    html += `<tr class="day-row"><td colspan="3">${fmtLarga(f)}<span class="day-tot">${fmt(totDia)} h</span></td></tr>`;
+    const emps = [...new Set(delDia.map(r=>r.empleado))].sort();
+    emps.forEach(e=>{
+      const filas = delDia.filter(r=>r.empleado===e);
+      const te = filas.reduce((a,r)=>a+Number(r.horas),0);
+      html += `<tr class="emp-row"><td colspan="3">${esc(e)}<span class="day-tot">${fmt(te)} h</span></td></tr>`;
+      html += filas.map(r=>`<tr><td class="left indent">${esc(r.actividad)}</td><td class="tot">${fmt(Number(r.horas))}</td><td class="nota-cell">${esc(r.nota||'')}</td></tr>`).join('');
+    });
+    const faltan = esperados.filter(n=> !emps.includes(n));
+    if(faltan.length) html += `<tr class="missing-row"><td colspan="3">⚠ Sin registro este día: ${faltan.map(esc).join(', ')}</td></tr>`;
+  });
+  document.getElementById('aBody').innerHTML = html || `<tr><td colspan="3" style="color:var(--muted)">Sin días en el rango.</td></tr>`;
 }
 
 function descargarCSV(){
   if(!datosAdmin.length){ nota('aMsg','Primero consulta un rango con datos.','err'); return; }
   const q = v => '"' + String(v??'').replace(/"/g,'""') + '"';
-  const lineas = ['Empleado;Actividad;Fecha;Horas;Nota'].concat(
-    datosAdmin.map(r=>[q(r.empleado),q(r.actividad),r.fecha,String(r.horas).replace('.',','),q(r.nota)].join(';')));
+  const filtro = document.getElementById('aEmp').value;
+  const lineas = ['Fecha;Día;Empleado;Actividad;Horas;Nota'].concat(
+    datosAdmin.filter(r=> !filtro || r.empleado===filtro)
+      .map(r=>[r.fecha, parseISO(r.fecha).toLocaleDateString('es-EC',{weekday:'long'}), q(r.empleado),q(r.actividad),String(r.horas).replace('.',','),q(r.nota)].join(';')));
   const blob = new Blob(['﻿'+lineas.join('\r\n')],{type:'text/csv;charset=utf-8'});
   const a = document.createElement('a'); a.href=URL.createObjectURL(blob);
   a.download = `horas_actividades_${document.getElementById('aDesde').value}_${document.getElementById('aHasta').value}.csv`;
